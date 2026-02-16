@@ -1,0 +1,281 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== Business & Account =====
+model Business {
+  id        String     @id @default(cuid())
+  name      String
+  email     String     @unique
+  phone     String?
+  address   String?
+  website   String?
+  logoUrl   String?
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  // Relations
+  printers  Printer[]
+  jobs      Job[]
+  addOns    AddOn[]
+  materials Material[]
+  settings  BusinessSettings?
+  users     User[]
+  queues    PrintQueue[]
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      UserRole @default(OPERATOR)
+  status    UserStatus @default(ACTIVE)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  OPERATOR
+  TECHNICIAN
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+// ===== Printer Management =====
+model Printer {
+  id          String   @id @default(cuid())
+  name        String
+  model       String
+  serialNumber String?
+  status      PrinterStatus @default(OFFLINE)
+  ipAddress   String?
+  wattage     Int      @default(200) // watts
+  available   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lastSeen    DateTime @default(now())
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  // Current job
+  currentJobId String? @unique
+  currentJob   Job? @relation("PrinterCurrentJob", fields: [currentJobId], references: [id])
+
+  // Relations
+  jobs        Job[]
+  queueItems  PrintQueue[]
+
+  @@index([businessId])
+  @@index([status])
+}
+
+enum PrinterStatus {
+  IDLE
+  PRINTING
+  PAUSED
+  ERROR
+  OFFLINE
+  MAINTENANCE
+}
+
+// ===== Job & Print Management =====
+model Job {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  modelFile     String   // File path or S3 URL
+  fileSize      Int      // bytes
+  uploadedAt    DateTime @default(now())
+  status        JobStatus @default(DRAFT)
+  
+  // Print Details
+  material      String
+  materialGrams Float
+  estimatedPrintTimeHours Float
+  layerHeight   Float?
+  infill        Int?
+  
+  // Pricing
+  basePrice     Float    @default(0)
+  finalPrice    Float    @default(0)
+  notes         String?
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  startedAt     DateTime?
+  completedAt   DateTime?
+
+  businessId    String
+  business      Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  assignedPrinterId String?
+  assignedPrinter   Printer?  @relation(fields: [assignedPrinterId], references: [id], onDelete: SetNull)
+
+  // Relations
+  pricing       Pricing?
+  queue         PrintQueue?
+
+  // Printer current job
+  printerCurrentJob Printer? @relation("PrinterCurrentJob")
+
+  @@index([businessId])
+  @@index([status])
+  @@index([assignedPrinterId])
+}
+
+enum JobStatus {
+  DRAFT
+  READY
+  QUEUED
+  PRINTING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ===== Pricing =====
+model Pricing {
+  id        String   @id @default(cuid())
+  materialCost Float
+  electricityCost Float
+  addOnsCost Float @default(0)
+  packagingCost Float @default(0)
+  shippingCost Float @default(0)
+  laborCost Float @default(0)
+  subtotal  Float
+  marginPercentage Float @default(30)
+  finalPrice Float
+  profitAmount Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobId     String @unique
+  job       Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
+
+// ===== Materials =====
+model Material {
+  id        String   @id @default(cuid())
+  name      String
+  color     String?
+  costPerGram Float    // Cost per gram in USD
+  density   Float?    // g/cm³
+  strength  String?   // HIGH, MEDIUM, LOW
+  support   Boolean   @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
+
+// ===== Add-ons =====
+model AddOn {
+  id        String   @id @default(cuid())
+  name      String
+  description String?
+  category  AddOnCategory
+  unitPrice Float
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  // Line items in jobs
+  lineItems AddOnLineItem[]
+
+  @@index([businessId])
+}
+
+enum AddOnCategory {
+  PACKAGING
+  SHIPPING
+  FINISHING
+  ASSEMBLY
+  CUSTOM
+}
+
+model AddOnLineItem {
+  id        String @id @default(cuid())
+  quantity  Int
+  unitPrice Float
+  total     Float
+
+  addOnId   String
+  addOn     AddOn @relation(fields: [addOnId], references: [id], onDelete: Cascade)
+
+  @@index([addOnId])
+}
+
+// ===== Queue Management =====
+model PrintQueue {
+  id        String   @id @default(cuid())
+  position  Int      // Queue position
+  status    QueueStatus @default(PENDING)
+  assignedManually Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobId     String @unique
+  job       Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  printerId String
+  printer   Printer @relation(fields: [printerId], references: [id], onDelete: Cascade)
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([printerId])
+  @@index([status])
+}
+
+enum QueueStatus {
+  PENDING
+  PRINTING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+// ===== Settings =====
+model BusinessSettings {
+  id        String   @id @default(cuid())
+  kwhRate   Float    @default(0.12)
+  marginPercentage Float @default(30)
+  autoQueueEnabled Boolean @default(true)
+  autoAssignPrinter Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  businessId String @unique
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+}
